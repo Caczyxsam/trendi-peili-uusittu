@@ -9,6 +9,9 @@ export const inputSchema = z.object({
 });
 
 const MODEL = "claude-sonnet-4-6";
+// The Decoder is a short, conversational explain-this-item task (with at most one
+// light search), so it runs on the faster, cheaper Haiku tier rather than Sonnet.
+const DECODER_MODEL = "claude-haiku-4-5-20251001";
 
 // Validation schema for the report the model submits via the tool call.
 // TrendReport is the shape inferred from this so the server/UI contract stays in one place.
@@ -370,9 +373,19 @@ How to answer:
 - Use everyday language. If you must use slang or jargon, define it.
 - Be specific and honest about what it means, how it is correctly used, the context it shows up in, and any real risks or dangers — never downplay or exaggerate.
 - Keep replies short (2-4 sentences) unless the user asks for more detail.
+- You have a web_search tool. Answer directly from the item details above and your own knowledge. Search ONLY when the user asks something current or factual you cannot answer confidently — e.g. recent incidents, whether it is genuinely dangerous, what people are saying right now — and search at most once, then answer. Do NOT search for general "what does it mean / how is it used" questions.
 - If a question is not about this item, gently steer back to it.
 Respond in English.`;
 }
+
+const decoderTools = [
+  // Conditional verification: the Decoder searches only when a question needs
+  // current/factual grounding (capped at 1). Most chat turns answer directly and
+  // never search, so the common case stays as fast and cheap as a tool-less call.
+  // allowed_callers=["direct"] is required because Haiku 4.5 doesn't support
+  // programmatic tool calling (the web_search default).
+  { type: "web_search_20260209", name: "web_search", max_uses: 1, allowed_callers: ["direct"] },
+];
 
 export async function askAboutTrend(data) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -380,21 +393,41 @@ export async function askAboutTrend(data) {
 
   const client = new Anthropic({ apiKey });
 
-  try {
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 1024,
-      thinking: { type: "disabled" },
-      output_config: { effort: "low" },
-      // Trend details sit in the system prompt — stable within one card's chat,
-      // so follow-up questions read it from cache.
-      system: [
-        { type: "text", text: buildChatSystem(data.trend, data.audience), cache_control: { type: "ephemeral" } },
-      ],
-      messages: data.messages.map((m) => ({ role: m.role, content: m.content })),
-    });
+  const messages = data.messages.map((m) => ({ role: m.role, content: m.content }));
 
-    const reply = response.content
+  try {
+    // Same agentic-loop shape as the Researcher/Curator: the server-side web_search
+    // can pause the turn (pause_turn), in which case we resend to resume. When the
+    // model answers directly (no search), this finishes in a single pass.
+    // MAX_TURNS=3 covers a paused search round plus a safety margin.
+    const MAX_TURNS = 3;
+    let response;
+    for (let turn = 0; turn < MAX_TURNS; turn++) {
+      const stream = client.messages.stream({
+        model: DECODER_MODEL,
+        max_tokens: 512,
+        // Note: Haiku 4.5 does not support output_config.effort (Sonnet/Opus only).
+        thinking: { type: "disabled" },
+        // Trend details sit in the system prompt — stable within one card's chat,
+        // so follow-up questions read it from cache.
+        system: [
+          { type: "text", text: buildChatSystem(data.trend, data.audience), cache_control: { type: "ephemeral" } },
+        ],
+        tools: decoderTools,
+        messages,
+      });
+
+      response = await stream.finalMessage();
+
+      // pause_turn: the server-side search loop paused mid-turn — resend to resume.
+      if (response.stop_reason === "pause_turn") {
+        messages.push({ role: "assistant", content: response.content });
+        continue;
+      }
+      break;
+    }
+
+    const reply = (response?.content ?? [])
       .filter((b) => b.type === "text")
       .map((b) => b.text)
       .join("")
