@@ -1,5 +1,6 @@
 import { z } from "zod";
 import Anthropic from "@anthropic-ai/sdk";
+import { jsonrepair } from "jsonrepair";
 
 export const inputSchema = z.object({
   age: z.number().int().min(5).max(120),
@@ -34,6 +35,36 @@ const reportSchema = z.object({
   trends: z.array(trendSchema),
 });
 
+// Validate a tool-call report, returning the parsed report or null if malformed.
+// The model sometimes delivers `trends` as a JSON-encoded string instead of an
+// array — sometimes with unescaped inner quotes that won't even re-parse. We fix
+// it locally: strict JSON.parse first, then a tolerant jsonrepair pass. Both run
+// in-process, so we never pay a slow model round-trip for this common quirk. The
+// caller's resubmit loop is only a last resort for other validation failures.
+function coerceAndValidateReport(rawInput) {
+  let input = rawInput;
+  if (input && typeof input.trends === "string") {
+    let trends;
+    try {
+      trends = JSON.parse(input.trends);
+    } catch {
+      try {
+        trends = JSON.parse(jsonrepair(input.trends));
+      } catch {
+        trends = undefined;
+      }
+    }
+    if (trends !== undefined) input = { ...input, trends };
+  }
+  const result = reportSchema.safeParse(input);
+  return result.success ? result.data : null;
+}
+
+// Message we send back when a submit tool call doesn't validate, nudging the
+// model to resend correctly. Targets the two failure modes we actually see.
+const RESUBMIT_HINT =
+  "Your report did not validate. `trends` must be a JSON array of objects — not a string — and every string value must have its inner quotes escaped. Call the submit tool again with a well-formed report.";
+
 // JSON Schema for the client-side tool Claude calls to deliver the final report.
 // Mirrors reportSchema; minItems/maxItems keep the model honest about count.
 const submitReportInputSchema = {
@@ -43,6 +74,7 @@ const submitReportInputSchema = {
     confidence: { type: "string", enum: ["high", "medium", "low"] },
     trends: {
       type: "array",
+      description: "A JSON array of trend objects. Provide it as an actual array — never as a JSON-encoded string.",
       minItems: 4,
       maxItems: 8,
       items: {
@@ -137,8 +169,9 @@ Find about 7 of the latest, biggest trends for this demographic — all tied to 
 
 const tools = [
   // Server-side tool — Claude runs it on Anthropic's infra and decides when to search.
-  // Capped low: each search adds a round-trip and its results re-enter context every turn.
-  { type: "web_search_20260209", name: "web_search", max_uses: 2 },
+  // Capped at 1 for fast testing-phase results — each search adds a round-trip and
+  // its results re-enter context every turn.
+  { type: "web_search_20260209", name: "web_search", max_uses: 1 },
   // Client-side tool — Claude calls this to deliver the structured result.
   {
     type: "custom",
@@ -187,6 +220,7 @@ const submitCuratedReportInputSchema = {
     confidence: { type: "string", enum: ["high", "medium", "low"] },
     trends: {
       type: "array",
+      description: "A JSON array of trend objects. Provide it as an actual array — never as a JSON-encoded string.",
       minItems: 3,
       maxItems: 5,
       items: {
@@ -239,7 +273,7 @@ const submitCuratedReportInputSchema = {
 const curatorTools = [
   // Same server-side search tool as the Scout, but tightly budgeted — Curator
   // verifies only what it cannot judge from the candidate alone.
-  { type: "web_search_20260209", name: "web_search", max_uses: 2 },
+  { type: "web_search_20260209", name: "web_search", max_uses: 1 },
   {
     type: "custom",
     name: "submit_curated_report",
@@ -271,14 +305,15 @@ async function runCurator(client, demographic, candidates) {
     { role: "user", content: buildCuratorUserMessage(demographic, candidates) },
   ];
 
-  // Same agentic-loop pattern as the Scout: server-side web_search returns via
-  // pause_turn/tool_use and we resend until the model submits the final report.
-  // MAX_TURNS=4 covers: initial turn + up to 2 search rounds + a safety margin.
+  // Same agentic loop as the Researcher: server-side web_search returns via
+  // pause_turn/tool_use; we resend until the model submits a valid report, and
+  // feed an error back if a submission is malformed. MAX_TURNS=4 covers the
+  // initial turn + one search + one resubmit + margin.
   const MAX_TURNS = 4;
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const stream = client.messages.stream({
       model: MODEL,
-      max_tokens: 3000,
+      max_tokens: 4000,
       thinking: { type: "disabled" },
       output_config: { effort: "low" },
       system: [
@@ -295,7 +330,16 @@ async function runCurator(client, demographic, candidates) {
       (b) => b.type === "tool_use" && b.name === "submit_curated_report",
     );
     if (submitCall) {
-      return reportSchema.parse(submitCall.input);
+      const parsed = coerceAndValidateReport(submitCall.input);
+      if (parsed) return parsed;
+      // Malformed submission — feed the error back and let the model resubmit.
+      messages.push({
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: submitCall.id, is_error: true, content: RESUBMIT_HINT },
+        ],
+      });
+      continue;
     }
 
     if (response.stop_reason === "pause_turn" || response.stop_reason === "tool_use") continue;
@@ -305,17 +349,16 @@ async function runCurator(client, demographic, candidates) {
   throw new Error("Curator did not return a structured report.");
 }
 
-// Cheap heuristic gate: Scout's prompt is already strict, so most reports are
-// fine as-is. The Curator only earns its tokens when something specific looks
-// off — kept narrow so this triggers rarely.
+// Cheap heuristic gate: the Researcher's prompt is already strict, so most reports
+// ship as-is. During the testing phase the Curator runs ONLY on a clear bad-report
+// signal — a generic-looking title — so a second web-searching agent doesn't double
+// the latency on otherwise-fine results. (Low confidence and a short list, by
+// themselves, no longer trigger it; re-add those checks for stricter curation.)
 function needsCuration(report) {
-  // Scout self-reported uncertainty.
-  if (report.confidence === "low") return true;
-  // Scout barely scraped the schema floor (4) — likely struggled to find specifics.
-  if (report.trends.length < 5) return true;
   // Title carries no named-entity signal (capitalized word past the first
-  // character, @handle, or #tag) → probably a generic catch-all that Scout's
-  // own filter missed. "Espresso by Sabrina Carpenter" passes; "Dance challenges" doesn't.
+  // character, @handle, or #tag) → probably a generic catch-all that the
+  // Researcher's own filter missed. "Espresso by Sabrina Carpenter" passes;
+  // "Dance challenges" doesn't.
   if (report.trends.some((t) => !/[A-Z]|@\w+|#\w+/.test(t.title.slice(1)))) return true;
   return false;
 }
@@ -460,12 +503,13 @@ export async function analyzeTrends(data) {
   // wants, then signals completion by calling submit_trend_report. pause_turn means
   // the server-side search loop hit its iteration cap — we re-send to resume.
   let report;
-  const MAX_TURNS = 4;
+  // +1 over the search budget to leave room for one malformed-submit resubmit.
+  const MAX_TURNS = 5;
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       const stream = client.messages.stream({
         model: MODEL,
-        max_tokens: 4000,
+        max_tokens: 5000,
         // Thinking off + low effort: this is a "find a few latest trends" task,
         // not a reasoning problem. This is the biggest speed/cost lever.
         thinking: { type: "disabled" },
@@ -483,8 +527,19 @@ export async function analyzeTrends(data) {
         (b) => b.type === "tool_use" && b.name === "submit_trend_report",
       );
       if (submitCall) {
-        report = reportSchema.parse(submitCall.input);
-        break;
+        const parsed = coerceAndValidateReport(submitCall.input);
+        if (parsed) {
+          report = parsed;
+          break;
+        }
+        // Malformed submission — feed the error back and let the model resubmit.
+        messages.push({
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: submitCall.id, is_error: true, content: RESUBMIT_HINT },
+          ],
+        });
+        continue;
       }
 
       // pause_turn / tool_use (server-side web_search): loop to let the model continue.
