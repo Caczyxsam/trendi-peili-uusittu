@@ -94,11 +94,11 @@ export default function App() {
         <div className="relative mx-auto max-w-5xl px-4 py-14 sm:py-20 text-center text-primary-foreground">
           <div className="inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-1.5 text-sm backdrop-blur-sm">
             <Sparkles className="h-4 w-4" />
-            <span>AI-powered trend mirror</span>
+            <span>AI-powered parenting tool</span>
           </div>
-          <h1 className="mt-4 text-4xl sm:text-6xl font-bold tracking-tight">TrendMirror</h1>
+          <h1 className="mt-4 text-4xl sm:text-6xl font-bold tracking-tight">TrendView</h1>
           <p className="mt-3 mx-auto max-w-2xl text-base sm:text-lg text-white/90">
-            See what TikTok and Instagram content your chosen demographic is consuming right now.
+            Understand what your child sees on social media — and why it matters to them.
           </p>
         </div>
       </header>
@@ -110,8 +110,11 @@ export default function App() {
           className="rounded-3xl border border-border bg-card p-6 sm:p-8 shadow-[var(--shadow-glow)]"
           style={{ background: "var(--gradient-card)" }}
         >
+          <p className="mb-5 text-sm text-muted-foreground">
+            Enter your child's details to see the trends and topics they're likely consuming right now.
+          </p>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Age">
+            <Field label="Child's age">
               <input
                 type="number"
                 required
@@ -119,11 +122,11 @@ export default function App() {
                 max={120}
                 value={age}
                 onChange={(e) => setAge(e.target.value)}
-                placeholder="e.g. 22"
+                placeholder="e.g. 14"
                 className="input"
               />
             </Field>
-            <Field label="Gender">
+            <Field label="Child's gender">
               <select value={gender} onChange={(e) => setGender(e.target.value)} className="input">
                 <option>Female</option>
                 <option>Male</option>
@@ -131,7 +134,7 @@ export default function App() {
                 <option>Prefer not to say</option>
               </select>
             </Field>
-            <Field label="Country" className="sm:col-span-2">
+            <Field label="Child's country" className="sm:col-span-2">
               <input
                 type="text"
                 required
@@ -141,7 +144,7 @@ export default function App() {
                 className="input"
               />
             </Field>
-            <Field label="Topics" className="sm:col-span-2">
+            <Field label="Child's interests" className="sm:col-span-2">
               <input
                 type="text"
                 required
@@ -161,12 +164,12 @@ export default function App() {
             {loading ? (
               <>
                 <Loader2 className="h-5 w-5 animate-spin" />
-                Analyzing feed…
+                Analyzing their world…
               </>
             ) : (
               <>
                 <Sparkles className="h-5 w-5" />
-                Analyze feed
+                Show me their world
               </>
             )}
           </button>
@@ -175,7 +178,7 @@ export default function App() {
         {/* Always-visible disclaimer */}
         <p className="mt-4 flex items-start gap-2 text-xs text-muted-foreground">
           <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-          Results are an AI estimate, not real-time official data.
+          Results are an AI estimate based on your child's profile, not real-time platform data. Use as a conversation starter.
         </p>
 
         {/* Error */}
@@ -198,7 +201,7 @@ export default function App() {
           <section className="mt-10">
             <div className="rounded-3xl border border-border bg-card p-6 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <h2 className="text-xl font-bold text-foreground">Demographic feed summary</h2>
+                <h2 className="text-xl font-bold text-foreground">What they're seeing right now</h2>
                 <ConfidenceBadge level={report.confidence} />
               </div>
               <p className="mt-3 text-foreground/80">{report.summary}</p>
@@ -349,7 +352,7 @@ function TrendCard({ trend, audience }) {
     }
   };
 
-  const suggestions = ["What does it mean?", "How is it used?", "Is it safe?"];
+  const suggestions = ["What is this exactly?", "Should I be worried?", "How do I talk to my child about it?"];
 
   return (
     <article className="group flex flex-col rounded-2xl border border-border bg-card p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-[var(--shadow-glow)]">

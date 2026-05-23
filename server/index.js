@@ -61,5 +61,5 @@ if (fs.existsSync(clientDist)) {
 
 const port = Number(process.env.PORT) || 3001;
 app.listen(port, () => {
-  console.log(`TrendMirror server listening on http://localhost:${port}`);
+  console.log(`TrendView server listening on http://localhost:${port}`);
 });
