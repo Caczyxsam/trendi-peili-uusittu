@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Loader2,
   Sparkles,
@@ -13,6 +13,42 @@ import {
 
 import { analyzeTrends, askAboutTrend } from "./api.js";
 
+// Playful status lines shown while waiting. Purely cosmetic and client-side —
+// they cycle on a timer, make no requests, and cost zero tokens.
+const ANALYZE_MESSAGES = [
+  "Scrolling the feed so you don't have to…",
+  "Searching for what's blowing up right now…",
+  "Spotting this week's viral moments…",
+  "Sorting the hype from the noise…",
+  "Decoding the hashtags…",
+  "Peeking at the For You page…",
+  "Catching up on the group chat…",
+  "Almost got the scoop…",
+];
+
+const DECODER_MESSAGES = [
+  "Decoding this one…",
+  "Translating the internet…",
+  "Getting the full story…",
+  "Checking the latest…",
+];
+
+// Cycle through `messages` while `active`, swapping every `intervalMs`. No network,
+// no tokens — just a setInterval that advances a local index.
+function useCyclingMessage(messages, active, intervalMs = 2200) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    if (!active) {
+      setI(0);
+      return;
+    }
+    setI(0);
+    const id = setInterval(() => setI((n) => (n + 1) % messages.length), intervalMs);
+    return () => clearInterval(id);
+  }, [active, intervalMs, messages]);
+  return messages[i];
+}
+
 export default function App() {
   const [age, setAge] = useState("");
   const [gender, setGender] = useState("Female");
@@ -23,6 +59,7 @@ export default function App() {
   const [report, setReport] = useState(null);
   const [audience, setAudience] = useState(null);
   const [filter, setFilter] = useState("all");
+  const analyzeMsg = useCyclingMessage(ANALYZE_MESSAGES, loading);
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -152,7 +189,7 @@ export default function App() {
         {loading && !report && (
           <div className="mt-10 flex flex-col items-center justify-center gap-3 py-10 text-muted-foreground">
             <Loader2 className="h-10 w-10 animate-spin text-primary" />
-            <p className="text-sm">Finding trends and decoding them for you…</p>
+            <p className="text-sm transition-opacity">{analyzeMsg}</p>
           </div>
         )}
 
@@ -279,6 +316,7 @@ function TrendCard({ trend, audience }) {
   const [chatMsgs, setChatMsgs] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const decoderMsg = useCyclingMessage(DECODER_MESSAGES, chatLoading);
 
   const sendChat = async (text) => {
     const q = text.trim();
@@ -407,7 +445,7 @@ function TrendCard({ trend, audience }) {
 
             {chatLoading && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Thinking…
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> {decoderMsg}
               </div>
             )}
 
