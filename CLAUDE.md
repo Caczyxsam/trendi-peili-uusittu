@@ -4,7 +4,7 @@ Guidance for Claude Code working in this repository.
 
 ## What this is
 
-**TrendMirror** — give a demographic (age / gender / country / interests) and get back the
+**TrendView** — give a demographic (age / gender / country / interests) and get back the
 TikTok / Instagram trends and topics that group is likely consuming right now, each with an
 on-demand "Decoder" chat that explains one trend in plain language for an older adult.
 

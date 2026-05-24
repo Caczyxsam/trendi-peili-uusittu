@@ -1,4 +1,4 @@
-# TrendMirror
+# TrendView
 
 Takes a demographic (age / gender / country / interests) and returns the social
 media trends that demographic is likely consuming right now, each with an

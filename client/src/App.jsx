@@ -96,7 +96,7 @@ export default function App() {
             <Sparkles className="h-4 w-4" />
             <span>AI-powered parenting tool</span>
           </div>
-          <h1 className="mt-4 text-4xl sm:text-6xl font-bold tracking-tight">TrendMirror</h1>
+          <h1 className="mt-4 text-4xl sm:text-6xl font-bold tracking-tight">TrendView</h1>
           <p className="mt-3 mx-auto max-w-2xl text-base sm:text-lg text-white/90">
             Understand what your child sees on social media — and why it matters to them.
           </p>
